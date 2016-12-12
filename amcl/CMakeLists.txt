@@ -45,7 +45,8 @@ add_library(amcl_map
 add_library(amcl_sensors
                     src/amcl/sensors/amcl_sensor.cpp
                     src/amcl/sensors/amcl_odom.cpp
-                    src/amcl/sensors/amcl_laser.cpp)
+                    src/amcl/sensors/amcl_laser.cpp
+                    src/amcl/sensors/amcl_gps.cpp)
 target_link_libraries(amcl_sensors amcl_map amcl_pf)
 
 
