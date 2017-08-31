@@ -24,6 +24,7 @@
 #include <vector>
 #include <map>
 #include <cmath>
+#include <Eigen/Dense>
 
 #include <boost/bind.hpp>
 #include <boost/thread/mutex.hpp>
@@ -32,7 +33,7 @@
 #include "pf/pf.h"
 #include "sensors/amcl_odom.h"
 #include "sensors/amcl_laser.h"
-#include "sensors/amcl_gps.h"
+#include "sensors/amcl_gnss.h"
 
 #include "ros/assert.h"
 
@@ -130,6 +131,7 @@ class AmclNode
     bool nomotionUpdateCallback(std_srvs::Empty::Request& req,
                                     std_srvs::Empty::Response& res);
 
+
     void laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan);
     void initialPoseReceived(const geometry_msgs::PoseWithCovarianceStampedConstPtr& msg);
     void mapReceived(const nav_msgs::OccupancyGridConstPtr& msg);
@@ -147,7 +149,7 @@ class AmclNode
     //parameter for what base to use
     std::string base_frame_id_;
     std::string global_frame_id_;
-    std::string gps_frame_id_;
+    std::string gnss_frame_id_;
 
     bool use_map_topic_;
     bool first_map_only_;
@@ -166,7 +168,7 @@ class AmclNode
     message_filters::Subscriber<sensor_msgs::LaserScan>* laser_scan_sub_;
     tf::MessageFilter<sensor_msgs::LaserScan>* laser_scan_filter_;
     ros::Subscriber initial_pose_sub_;
-    ros::Subscriber gps_sub_;
+    ros::Subscriber gnss_sub_;
     std::vector< AMCLLaser* > lasers_;
     std::vector< bool > lasers_update_;
     std::map< std::string, int > frame_to_laser_;
@@ -187,6 +189,7 @@ class AmclNode
 
     AMCLOdom* odom_;
     AMCLLaser* laser_;
+    pf_vector_t old_pose;
 
     ros::Duration cloud_pub_interval;
     ros::Time last_cloud_pub_time;
@@ -210,6 +213,7 @@ class AmclNode
     ros::ServiceServer nomotion_update_srv_; //to let amcl update samples without requiring motion
     ros::Subscriber initial_pose_sub_old_;
     ros::Subscriber map_sub_;
+    ros::ServiceServer gnss_init_sev_;
 
     amcl_hyp_t* initial_pose_hyp_;
     bool first_map_received_;
@@ -219,6 +223,7 @@ class AmclNode
     dynamic_reconfigure::Server<amcl::AMCLConfig> *dsrv_;
     amcl::AMCLConfig default_config_;
     ros::Timer check_laser_timer_;
+
 
     int max_beams_, min_particles_, max_particles_;
     double alpha1_, alpha2_, alpha3_, alpha4_, alpha5_;
@@ -240,11 +245,14 @@ class AmclNode
     ros::Duration laser_check_interval_;
     void checkLaserReceived(const ros::TimerEvent& event);
 
-    //GPS
-    AmclGPSSensor gps_sensor;
-    GPSSensorData gps_data;
-    bool GPS_trigger;
-    void GPSCallback(const sensor_msgs::NavSatFixConstPtr &fix);
+    //gnss
+    int reset_frag;
+    AmclgnssSensor gnss_sensor;
+    gnssSensorData gnss_data;
+    double gnss_measure_data[20][2];
+    bool GNSS_trigger;
+    void gnssCallback(const sensor_msgs::NavSatFixConstPtr &fix);
+    bool gnssInitializationCallback(std_srvs::Empty::Request& req, std_srvs::Empty::Response& res);
 
 };
 
@@ -374,6 +382,8 @@ AmclNode::AmclNode() :
 					 &AmclNode::globalLocalizationCallback,
                                          this);
   nomotion_update_srv_= nh_.advertiseService("request_nomotion_update", &AmclNode::nomotionUpdateCallback, this);
+  gnss_init_sev_ = nh_.advertiseService("gnsn_initialization", &AmclNode::gnssInitializationCallback,this);
+
 
   laser_scan_sub_ = new message_filters::Subscriber<sensor_msgs::LaserScan>(nh_, scan_topic_, 100);
   laser_scan_filter_ =
@@ -384,7 +394,7 @@ AmclNode::AmclNode() :
   laser_scan_filter_->registerCallback(boost::bind(&AmclNode::laserReceived,
                                                    this, _1));
   initial_pose_sub_ = nh_.subscribe("initialpose", 2, &AmclNode::initialPoseReceived, this);
-  gps_sub_ = nh_.subscribe("/position_GPS", 1, &AmclNode::GPSCallback,this);
+  gnss_sub_ = nh_.subscribe("/position_GPS", 10, &AmclNode::gnssCallback,this);
 
   if(use_map_topic_) {
     map_sub_ = nh_.subscribe("map", 1, &AmclNode::mapReceived, this);
@@ -402,6 +412,11 @@ AmclNode::AmclNode() :
   laser_check_interval_ = ros::Duration(15.0);
   check_laser_timer_ = nh_.createTimer(laser_check_interval_,
                                        boost::bind(&AmclNode::checkLaserReceived, this, _1));
+
+  for(int i=0; i< 20; i++){
+    gnss_measure_data[i][0] = 0;
+    gnss_measure_data[i][1] = 0;
+  }
 }
 
 void AmclNode::reconfigureCB(AMCLConfig &config, uint32_t level)
@@ -865,17 +880,19 @@ AmclNode::nomotionUpdateCallback(std_srvs::Empty::Request& req,
 	return true;
 }
 
-//gps　sensor updata
-void AmclNode::GPSCallback(const sensor_msgs::NavSatFixConstPtr &fix){
-    if(fabs(fix->latitude) >0){
-        GPS_trigger = true;
-    }else{
-        GPS_trigger = false;
-    }
-    gps_data.x = fix->latitude;
-    gps_data.y = fix->longitude;
-    gps_data.position_covariance_type = fix->position_covariance_type;
-    return;
+bool AmclNode::gnssInitializationCallback(std_srvs::Empty::Request& req, std_srvs::Empty::Response& res){
+  pf_init_gnss_model(pf_, gnss_measure_data);
+  ROS_INFO("Initializing by gnss measurement");
+  pf_init_ = false;
+  return true;
+}
+
+//gnss　sensor updata
+void AmclNode::gnssCallback(const sensor_msgs::NavSatFixConstPtr &fix){
+    gnss_data.x = fix->latitude;
+    gnss_data.y = fix->longitude;
+    gnss_data.position_covariance_type = fix->position_covariance_type;
+    //ROS_ERROR("%lf",gnss_data.x);
 }
 
 void
@@ -1065,21 +1082,31 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
       ldata.ranges[i][1] = angle_min +
               (i * angle_increment);
     }
-    if(GPS_trigger){
-        gps_sensor.gpsSensorUpdata(pf_, (GPSSensorData*)&gps_data);
+/*
+    if(gnss_trigger){
+        gnss_sensor.gnssSensorUpdata(pf_, (gnssSensorData*)&gnss_data);
+    }
+*/
+    //Lasarによる計測更新を行う
+    lasers_[laser_index]->UpdateSensor(pf_, (AMCLSensorData*)&ldata);
+
+    double reset_result = pf_kidnapped_detection_normalization(pf_);
+
+    if(reset_result > 0){
+        ROS_ERROR("kidnaped");
+        gnss_sensor.gnssSensor_reseting(pf_, (gnssSensorData*)&gnss_data, reset_result);
     }
 
-    lasers_[laser_index]->UpdateSensor(pf_, (AMCLSensorData*)&ldata);
     lasers_update_[laser_index] = false;
 
     pf_odom_pose_ = pose;
-
-    // Resample the particles
     if(!(++resample_count_ % resample_interval_))
     {
       pf_update_resample(pf_);
       resampled = true;
     }
+
+
 
     pf_sample_set_t* set = pf_->sets + pf_->current_set;
     ROS_DEBUG("Num samples: %d\n", set->sample_count);
@@ -1134,11 +1161,11 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
 
     if(max_weight > 0.0)
     {
-      ROS_DEBUG("Max weight pose: %.3f %.3f %.3f",
+      /*ROS_INFO("Max weight pose: %.3f %.3f %.3f",
                 hyps[max_weight_hyp].pf_pose_mean.v[0],
                 hyps[max_weight_hyp].pf_pose_mean.v[1],
                 hyps[max_weight_hyp].pf_pose_mean.v[2]);
-
+      */
       /*
          puts("");
          pf_matrix_fprintf(hyps[max_weight_hyp].pf_pose_cov, stdout, "%6.3f");
@@ -1181,8 +1208,15 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
          }
        */
 
+
+
       pose_pub_.publish(p);
       last_published_pose = p;
+
+      //前回の位置としての保存を行う
+      old_pose.v[0] = hyps[max_weight_hyp].pf_pose_mean.v[0];
+      old_pose.v[1] = hyps[max_weight_hyp].pf_pose_mean.v[1];
+      old_pose.v[2] = hyps[max_weight_hyp].pf_pose_mean.v[2];
 
       ROS_DEBUG("New pose: %6.3f %6.3f %6.3f",
                hyps[max_weight_hyp].pf_pose_mean.v[0],
@@ -1336,6 +1370,10 @@ AmclNode::initialPoseReceived(const geometry_msgs::PoseWithCovarianceStampedCons
   pf_init_pose_mean.v[1] = pose_new.getOrigin().y();
   pf_init_pose_mean.v[2] = getYaw(pose_new);
   pf_matrix_t pf_init_pose_cov = pf_matrix_zero();
+
+  old_pose.v[0] = pf_init_pose_mean.v[0];
+  old_pose.v[1] = pf_init_pose_mean.v[1];
+  old_pose.v[2] = pf_init_pose_mean.v[2];
   // Copy in the covariance, converting from 6-D to 3-D
   for(int i=0; i<2; i++)
   {

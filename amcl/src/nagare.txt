@@ -1,0 +1,6 @@
+
+計測更新を行うとき
+  １．amcl_node.cppの計測更新の関数(amcl_(sensor).cppい存在する)を使用
+  2.amcl_(sendor).cppの中で計測のタイプによる分類
+  3.amcl_(sonsor).cで実際に計測更新を行う
+でやっていいる

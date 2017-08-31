@@ -54,9 +54,8 @@ typedef void (*pf_action_model_fn_t) (void *action_data,
 typedef double (*pf_sensor_model_fn_t) (void *sensor_data,
                                         struct _pf_sample_set_t* set);
 
-//レーザーとGPSの計測によりセンサパーティクルの確率の計算を行う
-typedef double (*pf_gps_sensor_model) ( void *gps_data, struct _pf_sample_set_t* set);
-
+//レーザーとgnssの計測によりセンサパーティクルの確率の計算を行う
+typedef double (*pf_gnss_sensor_model) ( void *gnss_data, struct _pf_sample_set_t* set);
 
 
 
@@ -139,16 +138,6 @@ typedef struct _pf_t
   int converged;
 } pf_t;
 
-//particles of using gps
-typedef struct _pf_gps{
-    //position x,y
-    double x,y;
-
-    //solution of Real time kinematick
-    int position_covariance_type;
-} pf_gps;
-
-
 // Create a new filter
 pf_t *pf_alloc(int min_samples, int max_samples,
                double alpha_slow, double alpha_fast,
@@ -163,17 +152,33 @@ void pf_init(pf_t *pf, pf_vector_t mean, pf_matrix_t cov);
 // Initialize the filter using some model
 void pf_init_model(pf_t *pf, pf_init_model_fn_t init_fn, void *init_data);
 
+
 // Update the filter with some new action
 void pf_update_action(pf_t *pf, pf_action_model_fn_t action_fn, void *action_data);
 
 // Update the filter with some new sensor observation
 void pf_update_sensor(pf_t *pf, pf_sensor_model_fn_t sensor_fn, void *sensor_data);
 
-//GPSとレーザーの計測によって更新を行う
-void pf_gps_update_sensor(pf_t *pf, pf_gps_sensor_model g_sensor_fn, void *gps_data);
+//--------------------------------変更を行った-----------------------------------------------------
+//particles of using gnss
+typedef struct _pf_gnss{
+    //position x,y
+    double x,y;
 
+    //solution of Real time kinematick
+    int position_covariance_type;
+} pf_gnss;
+
+//GNSS測量の結果により初期化を行う
+void pf_init_gnss_model(pf_t *pf, double (*gnss_data)[2]);
+//gnssとレーザーの計測によって更新を行う
+void pf_gnss_update_sensor(pf_t *pf, pf_gnss_sensor_model g_sensor_fn, void *gnss_data);
+//誘拐状態の検出と正規化を行う
+double pf_kidnapped_detection_normalization(pf_t *pf);
+//------------------------------------------------------------------------------------------------
 // Resample the distribution
 void pf_update_resample(pf_t *pf);
+
 
 // Compute the CEP statistics (mean and variance).
 void pf_get_cep_stats(pf_t *pf, pf_vector_t *mean, double *var);

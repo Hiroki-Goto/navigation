@@ -1,11 +1,18 @@
 cmake_minimum_required(VERSION 2.8.3)
 project(amcl)
 
+set(CMAKE_CXX_FLAGS "-march=native -O2 -std=c++11")
+set(CMAKE_SHARED_LIBRARY_LINK_C_FLAGS   "-march=native -O2")
+set(CMAKE_SHARED_LIBRARY_LINK_CXX_FLAGS "-march=native -O2")
+set(CMAKE_EXE_LINKER_FLAGS "-march=native -O2")
+
+
 find_package(catkin REQUIRED
         COMPONENTS
             roscpp
             tf
             dynamic_reconfigure
+			ecl_eigen
         )
 
 find_package(Boost REQUIRED)
@@ -33,7 +40,8 @@ add_library(amcl_pf
                     src/amcl/pf/pf_pdf.c
                     src/amcl/pf/pf_vector.c
                     src/amcl/pf/eig3.c
-                    src/amcl/pf/pf_draw.c)
+                    src/amcl/pf/pf_draw.c
+                    )
 
 add_library(amcl_map
                     src/amcl/map/map.c
@@ -46,7 +54,7 @@ add_library(amcl_sensors
                     src/amcl/sensors/amcl_sensor.cpp
                     src/amcl/sensors/amcl_odom.cpp
                     src/amcl/sensors/amcl_laser.cpp
-                    src/amcl/sensors/amcl_gps.cpp)
+                    src/amcl/sensors/amcl_gnss.cpp)
 target_link_libraries(amcl_sensors amcl_map amcl_pf)
 
 
