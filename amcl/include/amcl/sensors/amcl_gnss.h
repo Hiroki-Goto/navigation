@@ -23,6 +23,8 @@ public:
 
     virtual bool gnssSensorUpdata(pf_t *pf, gnssSensorData *gnss_data);
     virtual bool gnssSensor_reseting(pf_t *pf, gnssSensorData *gnss_data, double sample_num);
+    virtual double gnssPfKLD(pf_vector_t pf, gnssSensorData *gnss_data);
+
 };
 
 }

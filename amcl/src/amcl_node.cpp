@@ -29,6 +29,7 @@
 #include <boost/bind.hpp>
 #include <boost/thread/mutex.hpp>
 
+
 #include "map/map.h"
 #include "pf/pf.h"
 #include "sensors/amcl_odom.h"
@@ -56,6 +57,7 @@
 #include "tf/message_filter.h"
 #include "tf/tf.h"
 #include "message_filters/subscriber.h"
+#include <std_msgs/Float64.h>
 
 // Dynamic_reconfigure
 #include "dynamic_reconfigure/server.h"
@@ -189,7 +191,6 @@ class AmclNode
 
     AMCLOdom* odom_;
     AMCLLaser* laser_;
-    pf_vector_t old_pose;
 
     ros::Duration cloud_pub_interval;
     ros::Time last_cloud_pub_time;
@@ -213,7 +214,6 @@ class AmclNode
     ros::ServiceServer nomotion_update_srv_; //to let amcl update samples without requiring motion
     ros::Subscriber initial_pose_sub_old_;
     ros::Subscriber map_sub_;
-    ros::ServiceServer gnss_init_sev_;
 
     amcl_hyp_t* initial_pose_hyp_;
     bool first_map_received_;
@@ -253,6 +253,9 @@ class AmclNode
     bool GNSS_trigger;
     void gnssCallback(const sensor_msgs::NavSatFixConstPtr &fix);
     bool gnssInitializationCallback(std_srvs::Empty::Request& req, std_srvs::Empty::Response& res);
+    pf_vector_t max_weight_particle;
+    ros::ServiceServer gnss_init_sev_;
+    ros::Publisher kidnapped_bete_pub_;
 
 };
 
@@ -382,7 +385,7 @@ AmclNode::AmclNode() :
 					 &AmclNode::globalLocalizationCallback,
                                          this);
   nomotion_update_srv_= nh_.advertiseService("request_nomotion_update", &AmclNode::nomotionUpdateCallback, this);
-  gnss_init_sev_ = nh_.advertiseService("gnsn_initialization", &AmclNode::gnssInitializationCallback,this);
+
 
 
   laser_scan_sub_ = new message_filters::Subscriber<sensor_msgs::LaserScan>(nh_, scan_topic_, 100);
@@ -394,7 +397,6 @@ AmclNode::AmclNode() :
   laser_scan_filter_->registerCallback(boost::bind(&AmclNode::laserReceived,
                                                    this, _1));
   initial_pose_sub_ = nh_.subscribe("initialpose", 2, &AmclNode::initialPoseReceived, this);
-  gnss_sub_ = nh_.subscribe("/position_GPS", 10, &AmclNode::gnssCallback,this);
 
   if(use_map_topic_) {
     map_sub_ = nh_.subscribe("map", 1, &AmclNode::mapReceived, this);
@@ -413,6 +415,11 @@ AmclNode::AmclNode() :
   check_laser_timer_ = nh_.createTimer(laser_check_interval_,
                                        boost::bind(&AmclNode::checkLaserReceived, this, _1));
 
+
+  //GNSS
+  gnss_init_sev_ = nh_.advertiseService("gnsn_initialization", &AmclNode::gnssInitializationCallback,this);
+  gnss_sub_ = nh_.subscribe("/position_GPS", 10, &AmclNode::gnssCallback,this);
+  kidnapped_bete_pub_ = nh_.advertise<std_msgs::Float64>("/beta",1000);
   for(int i=0; i< 20; i++){
     gnss_measure_data[i][0] = 0;
     gnss_measure_data[i][1] = 0;
@@ -1082,19 +1089,18 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
       ldata.ranges[i][1] = angle_min +
               (i * angle_increment);
     }
-/*
-    if(gnss_trigger){
-        gnss_sensor.gnssSensorUpdata(pf_, (gnssSensorData*)&gnss_data);
-    }
-*/
+
     //Lasarによる計測更新を行う
     lasers_[laser_index]->UpdateSensor(pf_, (AMCLSensorData*)&ldata);
 
     double reset_result = pf_kidnapped_detection_normalization(pf_);
 
+    std_msgs::Float64 beta;
+    beta.data = reset_result;
+    kidnapped_bete_pub_.publish(beta);
     if(reset_result > 0){
         ROS_ERROR("kidnaped");
-        gnss_sensor.gnssSensor_reseting(pf_, (gnssSensorData*)&gnss_data, reset_result);
+        //gnss_sensor.gnssSensor_reseting(pf_, (gnssSensorData*)&gnss_data, reset_result);
     }
 
     lasers_update_[laser_index] = false;
@@ -1208,15 +1214,17 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
          }
        */
 
-
+      //最尤のパーティクルの位置とGNSS測位位置のKLDを求める
+      /*
+      max_weight_particle.v[0] = hyps[max_weight_hyp].pf_pose_mean.v[0];
+      max_weight_particle.v[1] = hyps[max_weight_hyp].pf_pose_mean.v[1];
+      max_weight_particle.v[2] = 0;
+      double reset_result = gnss_sensor.gnssPfKLD(max_weight_particle, (gnssSensorData*)&gnss_data);
+      */
 
       pose_pub_.publish(p);
       last_published_pose = p;
 
-      //前回の位置としての保存を行う
-      old_pose.v[0] = hyps[max_weight_hyp].pf_pose_mean.v[0];
-      old_pose.v[1] = hyps[max_weight_hyp].pf_pose_mean.v[1];
-      old_pose.v[2] = hyps[max_weight_hyp].pf_pose_mean.v[2];
 
       ROS_DEBUG("New pose: %6.3f %6.3f %6.3f",
                hyps[max_weight_hyp].pf_pose_mean.v[0],
@@ -1371,9 +1379,6 @@ AmclNode::initialPoseReceived(const geometry_msgs::PoseWithCovarianceStampedCons
   pf_init_pose_mean.v[2] = getYaw(pose_new);
   pf_matrix_t pf_init_pose_cov = pf_matrix_zero();
 
-  old_pose.v[0] = pf_init_pose_mean.v[0];
-  old_pose.v[1] = pf_init_pose_mean.v[1];
-  old_pose.v[2] = pf_init_pose_mean.v[2];
   // Copy in the covariance, converting from 6-D to 3-D
   for(int i=0; i<2; i++)
   {

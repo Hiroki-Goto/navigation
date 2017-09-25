@@ -307,7 +307,7 @@ void pf_update_sensor(pf_t *pf, pf_sensor_model_fn_t sensor_fn, void *sensor_dat
 
   // Compute the sample weights
   total = (*sensor_fn) (sensor_data, set);
-  printf("%lf  ",total);
+  //printf("%lf  ",total);
 /*
   //Gutmannらの履歴センサリセット法を行う
   static double alpha_long = 3.1;
@@ -393,7 +393,7 @@ double pf_kidnapped_detection_normalization(pf_t *pf){
      alpha_long = eta_long*total_weight +(1-eta_long)*alpha_long_t1;
      alpha_short = eta_short*total_weight +(1-eta_short)*alpha_short_t1;
      beta = 1 - alpha_th*alpha_short / alpha_long;
-    printf("%lf\n",beta);
+    //printf("%lf\n",beta);
      if(beta > 0){
        result = beta;
      }

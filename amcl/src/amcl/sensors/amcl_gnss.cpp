@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <unistd.h>
+#include <Eigen/Core>
+#include <Eigen/LU> //逆行列と行列式がcoreにないためインクルード
 
 #include "amcl_gnss.h"
 #include "pf_pdf.h"
@@ -83,4 +85,34 @@ bool AmclgnssSensor::gnssSensor_reseting(pf_t *pf, gnssSensorData *gnss_data, do
 
      }
    return true;
+}
+
+double AmclgnssSensor::gnssPfKLD(pf_vector_t pf, gnssSensorData *gnss_data){
+    double d = 2.0;   //対角成分の数
+
+    double pf_sigma = 1;
+    Eigen::Vector2d pf_position;
+    Eigen::Matrix2d pf_sigma_mx;
+    //std::cout << pf.v[0] << "\t" << pf.v[1] << std::endl;
+
+    double gnss_sigma = 5.0;
+    Eigen::Vector2d gnss_position;
+    Eigen::Matrix2d gnss_sigma_mx;
+
+    pf_position << pf.v[0], pf.v[1];
+    pf_sigma_mx << pf_sigma, 0,
+                   0, pf_sigma;
+
+    //std::cout << gnss_data->x << "\t" << gnss_data->y << std::endl;
+    gnss_position << gnss_data->x, gnss_data->y;
+    gnss_sigma_mx << gnss_sigma, 0,
+                  0, gnss_sigma;
+
+    double kld = ( log(gnss_sigma_mx.determinant() / pf_sigma_mx.determinant())
+                    + (gnss_sigma_mx.inverse()*pf_sigma_mx).trace()
+                        + (pf_position-gnss_position).transpose()*gnss_sigma_mx.inverse()*(pf_position-gnss_position) - d) /2;
+    //kld = log10(gnss_sigma_mx.determinant() / pf_sigma_mx.determinant());
+    //std::cout << gnss_sigma_mx(0,0) << "\t" <<  gnss_sigma_mx(1,1) << std::endl;
+    std::cout << kld << std::endl;
+    return kld;
 }
