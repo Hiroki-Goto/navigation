@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <unistd.h>
+
+//行列演算用ライブラリ
 #include <Eigen/Core>
 #include <Eigen/LU> //逆行列と行列式がcoreにないためインクルード
 
@@ -115,4 +117,43 @@ double AmclgnssSensor::gnssPfKLD(pf_vector_t pf, gnssSensorData *gnss_data){
     //std::cout << gnss_sigma_mx(0,0) << "\t" <<  gnss_sigma_mx(1,1) << std::endl;
     std::cout << kld << std::endl;
     return kld;
+}
+
+void AmclgnssSensor::er_gr(double kld, pf_t *pf, gnssSensorData *gnss_data, double beta, pf_vector_t *dispersion){
+    const double threshold = 200;
+    int reset_count = 0;
+    pf_sample_set_t *set;
+    pf_sample_t *sample;
+    int particle_num;
+    pf_vector_t pose;
+    const double gnss_sigma = 2.0;
+    set = pf->sets + pf->current_set;
+    int gr_sample_count = beta * set->sample_count;
+    if(kld > 20){
+        //GRリセットを行う
+        std::cout << "GR !!!!!!!!!!!!" << std::endl;
+        for(int i=0; i<gr_sample_count; i++){
+            particle_num = rand() % set->sample_count + 1;
+            sample = set->samples + particle_num;
+            pose = sample->pose;
+
+            sample->pose.v[0] = gnss_data->x + pf_ran_gaussian(gnss_sigma);
+            sample->pose.v[1] = gnss_data->y + pf_ran_gaussian(gnss_sigma);
+            sample->pose.v[2] = pf_ran_gaussian(3.14);
+        }
+    }else{
+        //膨張リセットを行う
+        std::cout << "ER !!!!!!!!!!!!" << std::endl;
+        double reset_limit = ((int)dispersion->v[0] + (int)dispersion->v[1]) / 2;
+        if(reset_count >= reset_limit){
+            for(int i=0; i<set->sample_count; i++ ){
+                sample = set->samples + i;
+                sample->pose.v[0] += (drand48() * 8 * dispersion->v[0]) - (4 * dispersion->v[0]);
+                sample->pose.v[1] += (drand48() * 8 * dispersion->v[1]) - (4 * dispersion->v[1]);
+                sample->pose.v[2] += (drand48() * 4 * dispersion->v[2]) - (2 * dispersion->v[2]);
+                sample->weight = 1.0 / set->sample_count;
+            }
+        }
+    }
+
 }

@@ -207,39 +207,7 @@ void pf_init_model(pf_t *pf, pf_init_model_fn_t init_fn, void *init_data)
   return;
 }
 
-void pf_init_gnss_model(pf_t *pf, double (*gnss_data)[2]){
-  int i,data_num;
-  pf_sample_set_t *set;
-  pf_sample_t *sample;
 
-  set = pf->sets + pf->current_set;
-
-  // Create the kd tree for adaptive sampling
-  pf_kdtree_clear(set->kdtree);
-
-  set->sample_count = pf->max_samples;
-
-  //保存している２０個のデータに沿ってサンプリングを行う
-  for (i = 0,data_num = 20; i < set->sample_count; i++){
-    sample = set->samples + i;
-    sample->weight = 1.0 / pf->max_samples;
-    sample->pose.v[0] = gnss_data[data_num][0] + pf_ran_gaussian(2.0);
-    sample->pose.v[1] = gnss_data[data_num][1] + pf_ran_gaussian(2.0);
-    sample->pose.v[2] = pf_ran_gaussian(3.14);
-    // Add sample to histogram
-    pf_kdtree_insert(set->kdtree, sample->pose, sample->weight);
-  }
-
-  pf->w_slow = pf->w_fast = 0.0;
-
-  // Re-compute cluster statistics
-  pf_cluster_stats(pf, set);
-
-  //set converged to 0
-  pf_init_converged(pf);
-
-  return;
-}
 
 void pf_init_converged(pf_t *pf){
   pf_sample_set_t *set;
@@ -307,7 +275,7 @@ void pf_update_sensor(pf_t *pf, pf_sensor_model_fn_t sensor_fn, void *sensor_dat
 
   // Compute the sample weights
   total = (*sensor_fn) (sensor_data, set);
-  //printf("%lf  ",total);
+ // printf("%lf  ",total);
 /*
   //Gutmannらの履歴センサリセット法を行う
   static double alpha_long = 3.1;
@@ -363,99 +331,6 @@ void pf_update_sensor(pf_t *pf, pf_sensor_model_fn_t sensor_fn, void *sensor_dat
   }
 */
   return;
-}
-
-
-double pf_kidnapped_detection_normalization(pf_t *pf){
-    int i;
-    pf_sample_set_t *set;
-    pf_sample_t *sample;
-    double total_weight=0;
-    double result;
-
-     set = pf->sets + pf->current_set;
-
-     for(i=0; i< set->sample_count; i++){
-         sample = set->samples + i;
-         total_weight += sample->weight;
-     }
-     //Gutmannらの履歴センサリセット法を行う
-     static double alpha_long = 3.1;
-     static double alpha_short = 3.1;
-     double w_ave;
-     const double eta_long = 0.001;
-     const double eta_short = 0.1;
-     double beta;
-     const double alpha_th = 1.7;
-
-     double alpha_long_t1 = alpha_long;
-     double alpha_short_t1 = alpha_short;
-     alpha_long = eta_long*total_weight +(1-eta_long)*alpha_long_t1;
-     alpha_short = eta_short*total_weight +(1-eta_short)*alpha_short_t1;
-     beta = 1 - alpha_th*alpha_short / alpha_long;
-    //printf("%lf\n",beta);
-     if(beta > 0){
-       result = beta;
-     }
-     else{
-         result = 0;
-     }
-
-     //printf("%lf\n",total_weight);
-     if (total_weight > 0.0){
-       // Normalize weights
-       double w_avg=0.0;
-       for (i = 0; i < set->sample_count; i++){
-         sample = set->samples + i;
-         w_avg += sample->weight;
-         sample->weight /= total_weight;
-       }
-       // Update running averages of likelihood of samples (Prob Rob p258)
-       w_avg /= set->sample_count;
-       if(pf->w_slow == 0.0){
-           pf->w_slow = w_avg;
-       }
-       else{
-           pf->w_slow += pf->alpha_slow * (w_avg - pf->w_slow);
-       }
-       if(pf->w_fast == 0.0)
-         pf->w_fast = w_avg;
-       else
-         pf->w_fast += pf->alpha_fast * (w_avg - pf->w_fast);
-       //printf("w_avg: %e slow: %e fast: %e\n", w_avg, pf->w_slow, pf->w_fast);
-     }
-     else{
-       // Handle zero total
-       for (i = 0; i < set->sample_count; i++){
-         sample = set->samples + i;
-         sample->weight = 1.0 / set->sample_count;
-       }
-     }
-
-     return result;
-}
-
-void pf_gnss_update_sensor(pf_t *pf, pf_gnss_sensor_model g_sensor_fn, void *gnss_data){
-    int i;
-    pf_sample_set_t *set;
-    pf_sample_t *sample;
-    double total;
-
-    set = pf->sets + pf->current_set;
-    // Compute the sample weights
-    total = (g_sensor_fn) ( gnss_data, set );
-    //↓やる必要ある？
-    if (total > 0.0){
-
-
-    }else{
-        // Handle zero total
-        for ( i = 0; i < set->sample_count; i++){
-            sample = set->samples + i;
-            sample->weight = 1.0 / set->sample_count;
-        }
-    }
-    return;
 }
 
 
@@ -807,4 +682,242 @@ int pf_get_cluster_stats(pf_t *pf, int clabel, double *weight,
   *cov = cluster->cov;
 
   return 1;
+}
+
+
+////////////////////////////////////////////////////////////
+//                       GNSS周り                          //
+////////////////////////////////////////////////////////////
+void pf_init_gnss_model(pf_t *pf, double (*gnss_data)[2]){
+  int i,data_num;
+  pf_sample_set_t *set;
+  pf_sample_t *sample;
+
+  set = pf->sets + pf->current_set;
+
+  // Create the kd tree for adaptive sampling
+  pf_kdtree_clear(set->kdtree);
+
+  set->sample_count = pf->max_samples;
+
+  //保存している２０個のデータに沿ってサンプリングを行う
+  for (i = 0,data_num = 20; i < set->sample_count; i++){
+    sample = set->samples + i;
+    sample->weight = 1.0 / pf->max_samples;
+    sample->pose.v[0] = gnss_data[data_num][0] + pf_ran_gaussian(2.0);
+    sample->pose.v[1] = gnss_data[data_num][1] + pf_ran_gaussian(2.0);
+    sample->pose.v[2] = pf_ran_gaussian(3.14);
+    // Add sample to histogram
+    pf_kdtree_insert(set->kdtree, sample->pose, sample->weight);
+  }
+
+  pf->w_slow = pf->w_fast = 0.0;
+
+  // Re-compute cluster statistics
+  pf_cluster_stats(pf, set);
+
+  //set converged to 0
+  pf_init_converged(pf);
+
+  return;
+}
+
+void pf_gnss_update_sensor(pf_t *pf, pf_gnss_sensor_model g_sensor_fn, void *gnss_data){
+    int i;
+    pf_sample_set_t *set;
+    pf_sample_t *sample;
+    double total;
+
+    set = pf->sets + pf->current_set;
+    // Compute the sample weights
+    total = (g_sensor_fn) ( gnss_data, set );
+    //↓やる必要ある？
+    if (total > 0.0){
+
+
+    }else{
+        // Handle zero total
+        for ( i = 0; i < set->sample_count; i++){
+            sample = set->samples + i;
+            sample->weight = 1.0 / set->sample_count;
+        }
+    }
+    return;
+}
+
+double pf_kidnapped_detection_normalization(pf_t *pf){
+    int i;
+    pf_sample_set_t *set;
+    pf_sample_t *sample;
+    double total_weight=0;
+    double result;
+
+     set = pf->sets + pf->current_set;
+
+     for(i=0; i< set->sample_count; i++){
+         sample = set->samples + i;
+         total_weight += sample->weight;
+     }
+     //Gutmannらの履歴センサリセット法を行う
+     static double alpha_long = 3.1;
+     static double alpha_short = 3.1;
+     double w_ave;
+     const double eta_long = 0.001;
+     const double eta_short = 0.1;
+     double beta;
+     const double alpha_th = 1.7;
+
+     double alpha_long_t1 = alpha_long;
+     double alpha_short_t1 = alpha_short;
+     alpha_long = eta_long*total_weight +(1-eta_long)*alpha_long_t1;
+     alpha_short = eta_short*total_weight +(1-eta_short)*alpha_short_t1;
+     beta = 1 - alpha_th*alpha_short / alpha_long;
+    printf("%lf\n",beta);
+     if(beta > 0){
+       result = beta;
+     }
+     else{
+         result = 0;
+     }
+
+     //printf("%lf\n",total_weight);
+     if (total_weight > 0.0){
+       // Normalize weights
+       double w_avg=0.0;
+       for (i = 0; i < set->sample_count; i++){
+         sample = set->samples + i;
+         w_avg += sample->weight;
+         sample->weight /= total_weight;
+       }
+       // Update running averages of likelihood of samples (Prob Rob p258)
+       w_avg /= set->sample_count;
+       if(pf->w_slow == 0.0){
+           pf->w_slow = w_avg;
+       }
+       else{
+           pf->w_slow += pf->alpha_slow * (w_avg - pf->w_slow);
+       }
+       if(pf->w_fast == 0.0)
+         pf->w_fast = w_avg;
+       else
+         pf->w_fast += pf->alpha_fast * (w_avg - pf->w_fast);
+       //printf("w_avg: %e slow: %e fast: %e\n", w_avg, pf->w_slow, pf->w_fast);
+     }
+     else{
+       // Handle zero total
+       for (i = 0; i < set->sample_count; i++){
+         sample = set->samples + i;
+         sample->weight = 1.0 / set->sample_count;
+       }
+     }
+
+     return result;
+}
+double pf_detect_kidnapped_cal_dispersion(pf_t *pf, pf_vector_t *dispersion){
+
+    int i;
+    pf_sample_set_t *set;
+    pf_sample_t *sample;
+    double total_weight=0;
+    double result;
+
+    double x_sum = 0.0, y_sum = 0.0, theta_sum = 0.0;		//パラメータの和
+    double x_sumv = 0.0, y_sumv = 0.0, theta_sumv = 0.0;	//２乗和
+    double x_v = 0.0, y_v = 0.0, theta_v = 0.0;		//分散
+    double v_limit = 2000.0;
+
+     set = pf->sets + pf->current_set;
+
+     for(i=0; i< set->sample_count; i++){
+         sample = set->samples + i;
+         total_weight += sample->weight;
+     }
+     //Gutmannらの履歴センサリセット法を行う
+     static double alpha_long = 3.1;
+     static double alpha_short = 3.1;
+     double w_ave;
+     const double eta_long = 0.001;
+     const double eta_short = 0.1;
+     double beta;
+     const double alpha_th = 1.7;
+
+     double alpha_long_t1 = alpha_long;
+     double alpha_short_t1 = alpha_short;
+     alpha_long = eta_long*total_weight +(1-eta_long)*alpha_long_t1;
+     alpha_short = eta_short*total_weight +(1-eta_short)*alpha_short_t1;
+     beta = 1 - alpha_th*alpha_short / alpha_long;
+     //printf("%lf\n",beta);
+     /*if(beta > 0){
+       result = beta;
+     }
+     else{
+         result = 0;
+     }
+*/
+     //printf("%lf\n",total_weight);
+     if (total_weight > 0.0){
+       // Normalize weights
+       double w_avg=0.0;
+       for (i = 0; i < set->sample_count; i++){
+         sample = set->samples + i;
+         x_sum += sample->pose.v[0];
+         x_sumv += sample->pose.v[0] * sample->pose.v[0];
+         y_sum += sample->pose.v[1];
+         y_sumv += sample->pose.v[1] * sample->pose.v[1];
+         theta_sum += sample->pose.v[2];
+         theta_sumv += sample->pose.v[2] * sample->pose.v[2];
+
+         w_avg += sample->weight;
+         sample->weight /= total_weight;
+       }
+       // Update running averages of likelihood of samples (Prob Rob p258)
+       w_avg /= set->sample_count;
+       if(pf->w_slow == 0.0){
+           pf->w_slow = w_avg;
+       }
+       else{
+           pf->w_slow += pf->alpha_slow * (w_avg - pf->w_slow);
+       }
+       if(pf->w_fast == 0.0)
+         pf->w_fast = w_avg;
+       else
+         pf->w_fast += pf->alpha_fast * (w_avg - pf->w_fast);
+       //printf("w_avg: %e slow: %e fast: %e\n", w_avg, pf->w_slow, pf->w_fast);
+     }
+     else{
+       // Handle zero total
+       for (i = 0; i < set->sample_count; i++){
+         sample = set->samples + i;
+         sample->weight = 1.0 / set->sample_count;
+       }
+     }
+     //分散の制限(これがないとエラーを起こす), オーバーフロー防止
+      if(x_v >= v_limit){
+        x_v = v_limit;
+      }
+      if(x_v <= -v_limit){
+        x_v = -v_limit;
+      }
+      if(y_v >= v_limit){
+        y_v = v_limit;
+      }
+      if(y_v <= -v_limit){
+        y_v = -v_limit;
+      }
+      if(theta_v >= M_PI/2){
+        theta_v = M_PI/2;
+      }
+      if(theta_v <= -M_PI/2){
+        theta_v = -M_PI/2;
+      }
+
+     x_v = (x_sumv - (x_sum * x_sum / set->sample_count)) / set->sample_count;
+     y_v = (y_sumv - (y_sum * y_sum / set->sample_count)) / set->sample_count;
+     theta_v = (theta_sumv - (theta_sum * theta_sum / set->sample_count)) / set->sample_count;
+
+     dispersion->v[0] = x_v;
+     dispersion->v[1] = y_v;
+     dispersion->v[2] = theta_v;
+
+     return beta;
 }
