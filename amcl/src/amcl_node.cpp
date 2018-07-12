@@ -8,7 +8,7 @@
  *  version 2.1 of the License, or (at your option) any later version.
  *
  *  This library is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ /  but WITHOUT ANY WARRANTY; without even the implied warranty of
  *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  *  Lesser General Public License for more details.
  *
@@ -47,6 +47,7 @@
 #include "geometry_msgs/PoseArray.h"
 #include "geometry_msgs/Pose.h"
 #include "nav_msgs/GetMap.h"
+#include "std_srvs/Trigger.h"
 #include "std_srvs/Empty.h"
 #include "sensor_msgs/NavSatFix.h"
 
@@ -253,6 +254,11 @@ class AmclNode
     bool GNSS_trigger;
     void gnssCallback(const sensor_msgs::NavSatFixConstPtr &fix);
     bool gnssInitializationCallback(std_srvs::Empty::Request& req, std_srvs::Empty::Response& res);
+    ros::Publisher data_pub;
+    ros::ServiceClient kidnapped_req;
+    ros::ServiceClient resume_req;
+    bool reset_frag;
+    bool before_reset_ftag;
 
 };
 
@@ -382,7 +388,7 @@ AmclNode::AmclNode() :
 					 &AmclNode::globalLocalizationCallback,
                                          this);
   nomotion_update_srv_= nh_.advertiseService("request_nomotion_update", &AmclNode::nomotionUpdateCallback, this);
-  gnss_init_sev_ = nh_.advertiseService("gnsn_initialization", &AmclNode::gnssInitializationCallback,this);
+
 
 
   laser_scan_sub_ = new message_filters::Subscriber<sensor_msgs::LaserScan>(nh_, scan_topic_, 100);
@@ -394,7 +400,15 @@ AmclNode::AmclNode() :
   laser_scan_filter_->registerCallback(boost::bind(&AmclNode::laserReceived,
                                                    this, _1));
   initial_pose_sub_ = nh_.subscribe("initialpose", 2, &AmclNode::initialPoseReceived, this);
+
+  //gnss
+  gnss_init_sev_ = nh_.advertiseService("gnsn_initialization", &AmclNode::gnssInitializationCallback,this);
   gnss_sub_ = nh_.subscribe("/position_GPS", 10, &AmclNode::gnssCallback,this);
+  data_pub = nh_.advertise<geometry_msgs::Vector3>("analysis_data",10);
+  kidnapped_req = nh_.serviceClient<std_srvs::Empty>("kidnapped_req");
+  resume_req = nh_.serviceClient<std_srvs::Empty>("resume_req");
+  reset_frag = false;
+  before_reset_ftag = false;
 
   if(use_map_topic_) {
     map_sub_ = nh_.subscribe("map", 1, &AmclNode::mapReceived, this);
@@ -1091,17 +1105,36 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
     lasers_[laser_index]->UpdateSensor(pf_, (AMCLSensorData*)&ldata);
 
     double reset_result;
-    //reset_result = pf_kidnapped_detection_normalization(pf_);
-    reset_result = pf_detect_kidnapped_cal_dispersion(pf_, &dispersion);
+    analysis_t data_t;
+    geometry_msgs::Vector3 nya;
+
+    //reset_result = pf_detect_kidnapped_cal_dispersion(pf_, &data_t);
+    reset_result = pf_lenser_kidanapped(pf_, &data_t);
+    nya.x = data_t.total_weight;
+    nya.y = data_t.dispersion.v[0] + data_t.dispersion.v[1];
+
+    //ROS_INFO("%lf",dispersion.v[0]);
     double kld;
     kld = gnss_sensor.gnssPfKLD(old_pose,(gnssSensorData*)&gnss_data);
     //ROS_INFO("%lf",reset_result);
     if(reset_result > 0){
+	  	std_srvs::Empty srv;
+      	kidnapped_req.call(srv);
+      	before_reset_ftag = reset_frag;
         ROS_ERROR("kidnaped");
+        nya.z = 2.0;
+        //gnss_sensor.er(pf_, &data_t);
         //gnss_sensor.gnssSensor_reseting(pf_, (gnssSensorData*)&gnss_data, reset_result);
-        gnss_sensor.er_gr(kld, pf_, (gnssSensorData*)&gnss_data, reset_result, &dispersion);
+        gnss_sensor.er_gr(kld, pf_, (gnssSensorData*)&gnss_data, reset_result, &data_t);
+    }else{
+        ROS_INFO("NOT_kidnaped");
+        std_srvs::Empty srv;
+      	resume_req.call(srv);
+        reset_frag = false;
+        before_reset_ftag = false;
+        nya.z = 0.0;
     }
-
+    data_pub.publish(nya);
     lasers_update_[laser_index] = false;
 
     pf_odom_pose_ = pose;
@@ -1219,6 +1252,7 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
       last_published_pose = p;
 
       //前回の位置としての保存を行う
+      //情報量の計算で使う
       old_pose.v[0] = hyps[max_weight_hyp].pf_pose_mean.v[0];
       old_pose.v[1] = hyps[max_weight_hyp].pf_pose_mean.v[1];
       old_pose.v[2] = hyps[max_weight_hyp].pf_pose_mean.v[2];

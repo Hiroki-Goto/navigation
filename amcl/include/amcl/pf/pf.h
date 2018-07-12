@@ -201,13 +201,19 @@ typedef struct _pf_gnss{
     int position_covariance_type;
 } pf_gnss;
 
+typedef struct analysis_{
+    pf_vector_t dispersion;
+    double total_weight;
+} analysis_t;
+
 //GNSS測量の結果により初期化を行う
 void pf_init_gnss_model(pf_t *pf, double (*gnss_data)[2]);
 //gnssとレーザーの計測によって更新を行う
 void pf_gnss_update_sensor(pf_t *pf, pf_gnss_sensor_model g_sensor_fn, void *gnss_data);
 //誘拐状態の検出と正規化を行う
 double pf_kidnapped_detection_normalization(pf_t *pf);
-double pf_detect_kidnapped_cal_dispersion(pf_t *pf, pf_vector_t *dispersion);
+double pf_lenser_kidanapped(pf_t *pf,  analysis_t *analysis);
+double pf_detect_kidnapped_cal_dispersion(pf_t *pf,  analysis_t *analysis);
 //------------------------------------------------------------------------------------------------
 
 #ifdef __cplusplus

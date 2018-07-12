@@ -751,6 +751,7 @@ double pf_kidnapped_detection_normalization(pf_t *pf){
     pf_sample_t *sample;
     double total_weight=0;
     double result;
+    double alpha_th = 1.8;
 
      set = pf->sets + pf->current_set;
 
@@ -758,21 +759,8 @@ double pf_kidnapped_detection_normalization(pf_t *pf){
          sample = set->samples + i;
          total_weight += sample->weight;
      }
-     //Gutmannらの履歴センサリセット法を行う
-     static double alpha_long = 3.1;
-     static double alpha_short = 3.1;
-     double w_ave;
-     const double eta_long = 0.001;
-     const double eta_short = 0.1;
-     double beta;
-     const double alpha_th = 1.7;
-
-     double alpha_long_t1 = alpha_long;
-     double alpha_short_t1 = alpha_short;
-     alpha_long = eta_long*total_weight +(1-eta_long)*alpha_long_t1;
-     alpha_short = eta_short*total_weight +(1-eta_short)*alpha_short_t1;
-     beta = 1 - alpha_th*alpha_short / alpha_long;
-    printf("%lf\n",beta);
+     double beta = 1 - total_weight/alpha_th;
+     //printf("%lf\n",beta);
      if(beta > 0){
        result = beta;
      }
@@ -780,7 +768,6 @@ double pf_kidnapped_detection_normalization(pf_t *pf){
          result = 0;
      }
 
-     //printf("%lf\n",total_weight);
      if (total_weight > 0.0){
        // Normalize weights
        double w_avg=0.0;
@@ -813,49 +800,35 @@ double pf_kidnapped_detection_normalization(pf_t *pf){
 
      return result;
 }
-double pf_detect_kidnapped_cal_dispersion(pf_t *pf, pf_vector_t *dispersion){
-
+double pf_lenser_kidanapped(pf_t *pf,  analysis_t *analysis){
     int i;
     pf_sample_set_t *set;
     pf_sample_t *sample;
-    double total_weight=0;
-    double result;
+    double pf_total_weight=0;
+    double beta;
+    double alpha_th = 1.3;
 
     double x_sum = 0.0, y_sum = 0.0, theta_sum = 0.0;		//パラメータの和
     double x_sumv = 0.0, y_sumv = 0.0, theta_sumv = 0.0;	//２乗和
     double x_v = 0.0, y_v = 0.0, theta_v = 0.0;		//分散
-    double v_limit = 2000.0;
+    double w_sumv = 0.0, w_v = 0.0;
+    //double v_limit = 60;
+    double v_limit = 30;
 
      set = pf->sets + pf->current_set;
 
      for(i=0; i< set->sample_count; i++){
          sample = set->samples + i;
-         total_weight += sample->weight;
+         w_sumv += sample->weight * sample->weight;
+         pf_total_weight += sample->weight;
      }
-     //Gutmannらの履歴センサリセット法を行う
-     static double alpha_long = 3.1;
-     static double alpha_short = 3.1;
-     double w_ave;
-     const double eta_long = 0.001;
-     const double eta_short = 0.1;
-     double beta;
-     const double alpha_th = 1.7;
 
-     double alpha_long_t1 = alpha_long;
-     double alpha_short_t1 = alpha_short;
-     alpha_long = eta_long*total_weight +(1-eta_long)*alpha_long_t1;
-     alpha_short = eta_short*total_weight +(1-eta_short)*alpha_short_t1;
-     beta = 1 - alpha_th*alpha_short / alpha_long;
-     //printf("%lf\n",beta);
-     /*if(beta > 0){
-       result = beta;
-     }
-     else{
-         result = 0;
-     }
-*/
-     //printf("%lf\n",total_weight);
-     if (total_weight > 0.0){
+     w_v = ((w_sumv) - (pf_total_weight * pf_total_weight / set->sample_count)) / set->sample_count;
+     beta = 1 - pf_total_weight / alpha_th;
+
+     analysis -> total_weight = pf_total_weight;
+
+     if (pf_total_weight > 0.0){
        // Normalize weights
        double w_avg=0.0;
        for (i = 0; i < set->sample_count; i++){
@@ -868,7 +841,7 @@ double pf_detect_kidnapped_cal_dispersion(pf_t *pf, pf_vector_t *dispersion){
          theta_sumv += sample->pose.v[2] * sample->pose.v[2];
 
          w_avg += sample->weight;
-         sample->weight /= total_weight;
+         sample->weight /= pf_total_weight;
        }
        // Update running averages of likelihood of samples (Prob Rob p258)
        w_avg /= set->sample_count;
@@ -891,6 +864,9 @@ double pf_detect_kidnapped_cal_dispersion(pf_t *pf, pf_vector_t *dispersion){
          sample->weight = 1.0 / set->sample_count;
        }
      }
+     x_v = (x_sumv - (x_sum * x_sum / set->sample_count)) / set->sample_count;
+     y_v = (y_sumv - (y_sum * y_sum / set->sample_count)) / set->sample_count;
+     theta_v = (theta_sumv - (theta_sum * theta_sum / set->sample_count)) / set->sample_count;
      //分散の制限(これがないとエラーを起こす), オーバーフロー防止
       if(x_v >= v_limit){
         x_v = v_limit;
@@ -911,13 +887,117 @@ double pf_detect_kidnapped_cal_dispersion(pf_t *pf, pf_vector_t *dispersion){
         theta_v = -M_PI/2;
       }
 
+      analysis->dispersion.v[0] = x_v;
+      analysis->dispersion.v[1] = y_v;
+      analysis->dispersion.v[2] = theta_v;
+
+     return beta;
+
+}
+double pf_detect_kidnapped_cal_dispersion(pf_t *pf, analysis_t *analysis){
+
+    int i;
+    pf_sample_set_t *set;
+    pf_sample_t *sample;
+    double pf_total_weight=0;
+    double result;
+
+    double x_sum = 0.0, y_sum = 0.0, theta_sum = 0.0;		//パラメータの和
+    double x_sumv = 0.0, y_sumv = 0.0, theta_sumv = 0.0;	//２乗和
+    double x_v = 0.0, y_v = 0.0, theta_v = 0.0;		//分散
+    double w_sumv = 0.0, w_v = 0.0;
+    //double v_limit = 60;
+    double v_limit = 30;
+
+     set = pf->sets + pf->current_set;
+
+     for(i=0; i< set->sample_count; i++){
+         sample = set->samples + i;
+         w_sumv += sample->weight * sample->weight;
+         pf_total_weight += sample->weight;
+     }
+
+     w_v = ((w_sumv) - (pf_total_weight * pf_total_weight / set->sample_count)) / set->sample_count;
+
+     //Gutmannらの履歴センサリセット法を行う
+     static double alpha_long = 3.1;
+     static double alpha_short = 3.1;
+     double w_ave;
+     const double eta_long = 0.001;
+     const double eta_short = 0.1;
+     double beta;
+     const double alpha_th = 1.7;
+
+     double alpha_long_t1 = alpha_long;
+     double alpha_short_t1 = alpha_short;
+     alpha_long = eta_long*pf_total_weight +(1-eta_long)*alpha_long_t1;
+     alpha_short = eta_short*pf_total_weight +(1-eta_short)*alpha_short_t1;
+     beta = 1 - alpha_th*alpha_short / alpha_long;
+
+     analysis -> total_weight = pf_total_weight;
+
+     if (pf_total_weight > 0.0){
+       // Normalize weights
+       double w_avg=0.0;
+       for (i = 0; i < set->sample_count; i++){
+         sample = set->samples + i;
+         x_sum += sample->pose.v[0];
+         x_sumv += sample->pose.v[0] * sample->pose.v[0];
+         y_sum += sample->pose.v[1];
+         y_sumv += sample->pose.v[1] * sample->pose.v[1];
+         theta_sum += sample->pose.v[2];
+         theta_sumv += sample->pose.v[2] * sample->pose.v[2];
+
+         w_avg += sample->weight;
+         sample->weight /= pf_total_weight;
+       }
+       // Update running averages of likelihood of samples (Prob Rob p258)
+       w_avg /= set->sample_count;
+       if(pf->w_slow == 0.0){
+           pf->w_slow = w_avg;
+       }
+       else{
+           pf->w_slow += pf->alpha_slow * (w_avg - pf->w_slow);
+       }
+       if(pf->w_fast == 0.0)
+         pf->w_fast = w_avg;
+       else
+         pf->w_fast += pf->alpha_fast * (w_avg - pf->w_fast);
+       //printf("w_avg: %e slow: %e fast: %e\n", w_avg, pf->w_slow, pf->w_fast);
+     }
+     else{
+       // Handle zero total
+       for (i = 0; i < set->sample_count; i++){
+         sample = set->samples + i;
+         sample->weight = 1.0 / set->sample_count;
+       }
+     }
      x_v = (x_sumv - (x_sum * x_sum / set->sample_count)) / set->sample_count;
      y_v = (y_sumv - (y_sum * y_sum / set->sample_count)) / set->sample_count;
      theta_v = (theta_sumv - (theta_sum * theta_sum / set->sample_count)) / set->sample_count;
+     //分散の制限(これがないとエラーを起こす), オーバーフロー防止
+      if(x_v >= v_limit){
+        x_v = v_limit;
+      }
+      if(x_v <= -v_limit){
+        x_v = -v_limit;
+      }
+      if(y_v >= v_limit){
+        y_v = v_limit;
+      }
+      if(y_v <= -v_limit){
+        y_v = -v_limit;
+      }
+      if(theta_v >= M_PI/2){
+        theta_v = M_PI/2;
+      }
+      if(theta_v <= -M_PI/2){
+        theta_v = -M_PI/2;
+      }
 
-     dispersion->v[0] = x_v;
-     dispersion->v[1] = y_v;
-     dispersion->v[2] = theta_v;
+      analysis->dispersion.v[0] = x_v;
+      analysis->dispersion.v[1] = y_v;
+      analysis->dispersion.v[2] = theta_v;
 
      return beta;
 }

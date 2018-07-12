@@ -13,6 +13,7 @@ find_package(catkin REQUIRED
             tf
             dynamic_reconfigure
 			ecl_eigen
+            std_srvs
         )
 
 find_package(Boost REQUIRED)

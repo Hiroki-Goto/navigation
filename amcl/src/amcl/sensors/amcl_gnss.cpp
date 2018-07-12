@@ -75,7 +75,7 @@ bool AmclgnssSensor::gnssSensor_reseting(pf_t *pf, gnssSensorData *gnss_data, do
     set = pf->sets + pf->current_set;
     //ばら撒くパーティクルの個数
     int gnss_sample = set->sample_count * sample_num;
-    std::cout << gnss_sample << std::endl;
+    //std::cout << gnss_sample << std::endl;
      for(int i=0; i< gnss_sample; i++){
          particle_num = rand() % set->sample_count + 1;
          sample = set->samples + particle_num;
@@ -115,13 +115,42 @@ double AmclgnssSensor::gnssPfKLD(pf_vector_t pf, gnssSensorData *gnss_data){
                         + (pf_position-gnss_position).transpose()*gnss_sigma_mx.inverse()*(pf_position-gnss_position) - d) /2;
     //kld = log10(gnss_sigma_mx.determinant() / pf_sigma_mx.determinant());
     //std::cout << gnss_sigma_mx(0,0) << "\t" <<  gnss_sigma_mx(1,1) << std::endl;
-    std::cout << kld << std::endl;
+    //std::cout << kld << std::endl;
     return kld;
 }
 
-void AmclgnssSensor::er_gr(double kld, pf_t *pf, gnssSensorData *gnss_data, double beta, pf_vector_t *dispersion){
-    const double threshold = 200;
-    int reset_count = 0;
+void AmclgnssSensor::er(pf_t *pf, analysis_t *data){
+    int reset_count = 3;
+    pf_sample_set_t *set;
+    pf_sample_t *sample;
+    set = pf->sets + pf->current_set;
+    //std::cout << data->dispersion.v[0] << data->dispersion.v[1] << std::endl;
+    int reset_limit = ((int)data->dispersion.v[0] + (int)data->dispersion.v[1]) /2;
+    //std::cout << reset_limit << std::endl;
+    if(reset_count >= reset_limit){
+        for(int i=0; i<set->sample_count; i++ ){
+            sample = set->samples + i;
+            ///*
+            sample->pose.v[0] += (drand48() * 4 * data->dispersion.v[0]) - (2 * data->dispersion.v[0]);
+            sample->pose.v[1] += (drand48() * 4 * data->dispersion.v[1]) - (2 * data->dispersion.v[1]);
+            sample->pose.v[2] += (drand48() * 6 * data->dispersion.v[2]) - (3 * data->dispersion.v[2]);
+            //sample->pose.v[2] =  pf_ran_gaussian(3.14);
+            //*/
+            /*
+            sample->pose.v[0] += (drand48() *4 ) - 2;
+            sample->pose.v[1] += (drand48() *4 ) - 2;
+            sample->pose.v[2] += (drand48() *2) -1 ;
+            */
+
+            sample->weight = 1.0 / set->sample_count;
+        }
+    }
+
+
+}
+
+void AmclgnssSensor::er_gr(double kld, pf_t *pf, gnssSensorData *gnss_data, double beta,  analysis_t *data){
+    int reset_count = 3;
     pf_sample_set_t *set;
     pf_sample_t *sample;
     int particle_num;
@@ -129,9 +158,9 @@ void AmclgnssSensor::er_gr(double kld, pf_t *pf, gnssSensorData *gnss_data, doub
     const double gnss_sigma = 2.0;
     set = pf->sets + pf->current_set;
     int gr_sample_count = beta * set->sample_count;
-    if(kld > 20){
+    if(kld > 20 && (data->dispersion.v[0]+data->dispersion.v[0]) > 10){
         //GRリセットを行う
-        std::cout << "GR !!!!!!!!!!!!" << std::endl;
+        //std::cout << "GR !!!!!!!!!!!!" << std::endl;
         for(int i=0; i<gr_sample_count; i++){
             particle_num = rand() % set->sample_count + 1;
             sample = set->samples + particle_num;
@@ -143,14 +172,14 @@ void AmclgnssSensor::er_gr(double kld, pf_t *pf, gnssSensorData *gnss_data, doub
         }
     }else{
         //膨張リセットを行う
-        std::cout << "ER !!!!!!!!!!!!" << std::endl;
-        double reset_limit = ((int)dispersion->v[0] + (int)dispersion->v[1]) / 2;
+        //std::cout << "ER !!!!!!!!!!!!" << std::endl;
+        double reset_limit = ((int)data->dispersion.v[0] + (int)data->dispersion.v[1]) / 2;
         if(reset_count >= reset_limit){
             for(int i=0; i<set->sample_count; i++ ){
                 sample = set->samples + i;
-                sample->pose.v[0] += (drand48() * 8 * dispersion->v[0]) - (4 * dispersion->v[0]);
-                sample->pose.v[1] += (drand48() * 8 * dispersion->v[1]) - (4 * dispersion->v[1]);
-                sample->pose.v[2] += (drand48() * 4 * dispersion->v[2]) - (2 * dispersion->v[2]);
+                sample->pose.v[0] += (drand48() * 4 * data->dispersion.v[0]) - (2 * data->dispersion.v[0]);
+                sample->pose.v[1] += (drand48() * 4 * data->dispersion.v[1]) - (2 * data->dispersion.v[1]);
+                sample->pose.v[2] += (drand48() * 2 * data->dispersion.v[2]) - (1 * data->dispersion.v[2]);
                 sample->weight = 1.0 / set->sample_count;
             }
         }
